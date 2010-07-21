@@ -1,27 +1,26 @@
-#vim: set syn=sh:
+# vim: set syn=sh:
 #Maintainer: JRD <jrd@enialis.net>
 # Use fake-uname to match the kernel version you want to compile
 
 KVER=$(uname -r)
 pkgname=kernelive
 pkgver=$(echo $KVER|tr - .)
-pkgrel=3cp
-arch=i386
-source=(config-$KVER.live config-$KVER.live.patch aufs2-standalone-$(echo $KVER|sed 's/\([^.]*\.[^.]*\.[^.]*\)\..*/\1/').tgz squashfs3.4.tgz lzma457.tgz sqlzma2k-3.4.patch sqlzma.h sqmagic.h modules.conf Makefile)
-sourcetemplate=http://enialis.net/~jrd/salix/$pkgname/$pkgver-$pkgrel/
-docs=("readme" "copying" "sqlzma.txt")
+pkgrel=1cp
+#arch=noarch
+source=(config-$KVER.live config-$KVER.live.patch aufs2-standalone-$(echo $KVER|sed 's/\([^.]*\.[^.]*\.[^.]*\)\..*/\1/').tar.gz modules.conf 01-Squashfs-Move_zlib_decompression_wrapper_code_into_a_separate_file.patch 02-Squashfs-Factor_out_remaining_zlib_dependencies_into_separate_wrapper_file.patch 03-Squashfs-Add_a_decompressor_framework.patch 04-Squashfs-Add_decompressor_entries_for_lzma_and_lzo.patch 05-Squashfs-Add_support_for_LZMA_compressed_filesystems.patch 06-lzma-Make_lzma_available_to_non_initramfs_initrd_code.patch 07-Squashfs-Select_DECOMPRESS_LZMA_NEEDED_when_including_support_for_lzma.patch 08-lzma-Make_lzma_reentrant.patch)
+sourcetemplate=http://enialis.net/~jrd/salix/$pkgname/$pkgver-\$arch-$pkgrel/
+docs=("INFOS" "readme" "copying")
 
 slackdesc=\
 (
 #|-----handy-ruler------------------------------------------------------|
 "$pkgname (Linux kernel for Salix Live)"
 "Linux kernel for Salix Live is compiled with support for"
-"squashfs, lzma & aufs as well as for most hardware, "
+"squashfs, lzma & aufs2 as well as for most hardware, "
 "including SCSI, USB booting devices, etc.. "
-"" 
-"Drivers (such as for CD-ROM drives on proprietary interfaces,"
-"or ethernet cards) may be loaded as modules."
-"See /etc/rc.d/rc.modules for examples"
+""
+"This is the same kernel config as kernel-huge but with aufs2 FS and"
+"squashfs+lzma FS patches."
 )
 
 
@@ -30,7 +29,7 @@ build() {
   export KVER=$(echo $KVEREXTRA|sed 's/\(.*\)-.*/\1/')
   export SRC=$startdir/src
   export DEST=$startdir/pkg
-  export nbthreads=1 # PC qui plante sinon car chauffe trop :'(
+  export nbthreads=$(cat /proc/cpuinfo | grep ^processor | wc -l)
   # clone the kernel
   echo '########################################'
   echo "Cloning /usr/src/linux-$KVER..."
@@ -39,32 +38,23 @@ build() {
   cd $SRC/linuxsrc
   # clean the kernel
   make mrproper || exit 1
-  echo '* Applying aufs2-standalone.patch... *'
   # patch the kernel to use a new FS : aufs (an unionfs like filesystem)
-  patch -p1 < $SRC/aufs2-standalone/aufs2-standalone.patch || exit 1
-  if [ -e $SRC/aufs2-standalone/aufs2-base.patch ]; then
-    echo '* Applying aufs2-base.patch... *'
-    patch -p1 < $SRC/aufs2-standalone/aufs2-base.patch || exit 1
-  fi
-  # patch the kernel to use a specific squashfs FS : this one could use a compression algorithm
-  # We must first remove the squashfs 4.0 code without LZMA and then use the squashfs 3.4 which
-  # has patches for LZMA
-  sed 's/4\.0/3.4/' fs/squashfs/Kconfig > squashfs-Kconfig
-  rm -r fs/squashfs/*
-  mv squashfs-Kconfig fs/squashfs/Kconfig
-  echo '* Applying squashfs3.4-patch... *'
-  patch -p1 < $SRC/squashfs3.4/kernel-patches/linux-2.6.30/squashfs3.4-patch || exit 1
-  echo '* Applying sqlzma2k-3.4.patch...*'
-  # patch for squashfs 3.4
-  patch -p1 < $SRC/sqlzma2k-3.4.patch || exit 1
-  cp $SRC/sqlzma.h $SRC/sqmagic.h fs/squashfs/
-  # squashfs-tools is already patched to be aware of LZMA
-  # LZMA is already patched to build a kernel module
-  # install the AUFS code in the kernel
-  cp -r $SRC/aufs2-standalone/fs/aufs $SRC/linuxsrc/fs/
-  cp $SRC/aufs2-standalone/include/linux/aufs_type.h $SRC/linuxsrc/include/linux/
   echo '* Applying aufs2-kbuild.patch... *'
   patch -p1 < $SRC/aufs2-standalone/aufs2-kbuild.patch || exit 1
+  echo '* Applying aufs2-base.patch... *'
+  patch -p1 < $SRC/aufs2-standalone/aufs2-base.patch || exit 1
+  cp -r $SRC/aufs2-standalone/{Documentation,fs,include} . || exit 1
+  # patch the squashfs to use a decompressor wrapper and in particular lzma.
+  # patch for lzma to be used outside initrd/initramfs.
+  echo '* Applying squashfs-lzam patches... *'
+  patch -p1 < $SRC/01-Squashfs-Move_zlib_decompression_wrapper_code_into_a_separate_file.patch || exit 1
+  patch -p1 < $SRC/02-Squashfs-Factor_out_remaining_zlib_dependencies_into_separate_wrapper_file.patch || exit 1
+  patch -p1 < $SRC/03-Squashfs-Add_a_decompressor_framework.patch || exit 1
+  patch -p1 < $SRC/04-Squashfs-Add_decompressor_entries_for_lzma_and_lzo.patch || exit 1
+  patch -p1 < $SRC/05-Squashfs-Add_support_for_LZMA_compressed_filesystems.patch || exit 1
+  patch -p1 < $SRC/06-lzma-Make_lzma_available_to_non_initramfs_initrd_code.patch || exit 1
+  patch -p1 < $SRC/07-Squashfs-Select_DECOMPRESS_LZMA_NEEDED_when_including_support_for_lzma.patch || exit 1
+  patch -p1 < $SRC/08-lzma-Make_lzma_reentrant.patch || exit 1
   # use a suitable configuration for live environnement.
   cp $SRC/config-$KVEREXTRA.live .config
   make oldconfig scripts prepare || exit 1
@@ -82,30 +72,19 @@ build() {
   echo "Installing modules..."
   echo '########################################'
   make modules_install || exit 1
-  # now compile the squashfs+lzma modules
-  cd $SRC
-  echo '########################################'
-  echo "Compiling/installing squashfs + LZMA..."
-  echo '########################################'
-  make || exit 1
   unset INSTALL_MOD_PATH
-  # create the good structure for the modules
-  cd $DEST/lib/modules/$KVEREXTRA
-  rm -f modules.*
-  mkdir -p kernel/fs/squashfs
-  cp $SRC/lzma457/C/Compress/Lzma/kmod/{sq,un}lzma.ko kernel/fs/squashfs/
-  cp $SRC/linuxsrc/fs/squashfs/squashfs.ko kernel/fs/squashfs/
   # copy the kernel
   cd $DEST
   mkdir -p boot
-  cd boot
-  cp $SRC/linuxsrc/.config config-$KVEREXTRA
-  cp $SRC/linuxsrc/System.map System.map-$KVEREXTRA
-  cp $SRC/linuxsrc/arch/x86/boot/bzImage vmlinuz-$KVEREXTRA
-  ln -s config-$KVEREXTRA config
-  ln -s System.map-$KVEREXTRA System.map
-  ln -s vmlinuz-$KVEREXTRA vmlinuz
-  cd ..
+  (
+    cd boot
+    cp $SRC/linuxsrc/.config config-$KVEREXTRA
+    cp $SRC/linuxsrc/System.map System.map-$KVEREXTRA
+    cp $SRC/linuxsrc/arch/x86/boot/bzImage vmlinuz-$KVEREXTRA
+    ln -s config-$KVEREXTRA config
+    ln -s System.map-$KVEREXTRA System.map
+    ln -s vmlinuz-$KVEREXTRA vmlinuz
+  )
   # create rc.modules
   mkdir -p etc/rc.d
   cat << EOF > etc/rc.d/rc.modules
@@ -131,61 +110,51 @@ EOF
   chmod 755 etc/rc.d/rc.modules
   rm -rf $DEST/modules.conf $DEST/persist
   unset MODULECONF
-  # copy files necessary for later builds, like nvidia and vmware
-  cd $SRC/linuxsrc/include
-  mkdir -p $DEST/usr/src/linux-$KVER/include
-  for i in acpi asm-generic asm-x86 linux math-emu media net pcmcia scsi sound video; do
-    cp -rf $i $DEST/usr/src/linux-$KVER/include/
-  done
-  ( cd $DEST/usr/src/linux-$KVER/include; ln -sf asm-x86 asm )
-  ( cd $DEST/usr/src/linux-$KVER/include/linux; ln -sf autoconf.h config.h )
   # copy the kernel source outside the SLKBUILD tree to keep it.
   cp -r $SRC/linuxsrc $startdir/
-  cd $SRC/linuxsrc
-  cp .config $DEST/usr/src/linux-$KVER/
-  cp Makefile $DEST/usr/src/linux-$KVER/
-  cp Kbuild $DEST/usr/src/linux-$KVER/
-  cp Module.symvers $DEST/usr/src/linux-$KVER/
-  cp -a scripts $DEST/usr/src/linux-$KVER/
-  # fix permissions on scripts dir
-  chmod 755 -R $DEST/usr/src/linux-$KVER/scripts
-  mkdir -p $DEST/usr/src/linux-$KVER/.tmp_versions
-  mkdir -p $DEST/usr/src/linux-$KVER/arch/x86/kernel
-  cp arch/x86/Makefile* $DEST/usr/src/linux-$KVER/arch/x86/
-  cp arch/x86/kernel/asm-offsets.s $DEST/usr/src/linux-$KVER/arch/x86/kernel/
-  # add headers for lirc package
-  mkdir -p $DEST/usr/src/linux-$KVER/drivers/media/video
-  cp drivers/media/video/*.h  $DEST/usr/src/linux-$KVER/drivers/media/video/
-  for i in bt8xx cpia2 cx25840 cx88 em28xx et61x251 pwc saa7134 sn9c102 usbvideo zc0301; do
-    mkdir -p $DEST/usr/src/linux-$KVER/drivers/media/video/$i
-    cp -a drivers/media/video/$i/*.h $DEST/usr/src/linux-$KVER/drivers/media/video/$i
-  done
-  # add dm headers
-  mkdir -p $DEST/usr/src/linux-$KVER/drivers/md
-  cp drivers/md/*.h $DEST/usr/src/linux-$KVER/drivers/md
-  # add inotify.h
-  mkdir -p $DEST/usr/src/linux-$KVER/include/linux
-  cp include/linux/inotify.h $DEST/usr/src/linux-$KVER/include/linux/
-  # add wireless headers
-  mkdir -p $DEST/usr/src/linux-$KVER/net/mac80211/
-  cp net/mac80211/*.h $DEST/usr/src/linux-$KVER/net/mac80211/
-  # add CLUSTERIP file for iptables
-  mkdir -p $DEST/usr/src/linux-$KVER/net/ipv4/netfilter/
-  cp net/ipv4/netfilter/ipt_CLUSTERIP.c $DEST/usr/src/linux-$KVER/net/ipv4/netfilter/
-  # add xfs and shmem for aufs building
-  mkdir -p $DEST/usr/src/linux-$KVER/fs/xfs
-  mkdir -p $DEST/usr/src/linux-$KVER/mm
-  cp fs/xfs/xfs_sb.h $DEST/usr/src/linux-$KVER/fs/xfs/xfs_sb.h
-  cp mm/shmem.c $DEST/usr/src/linux-$KVER/mm/shmem.c
-  # add vmlinux
-  cp vmlinux $DEST/usr/src/linux-$KVER  
-  # copy in Kconfig files
-  for i in `find . -name "Kconfig*"`; do 
-    mkdir -p $DEST/usr/src/linux-$KVER/`echo $i | sed 's|/Kconfig.*||'`
-    cp $i $DEST/usr/src/linux-$KVER/$i
-  done
+  # copy files necessary for later builds, like nvidia and vmware
+  (
+    cd $SRC/linuxsrc
+    mkdir -p $DEST/usr/src/linux-$KVER/include
+    mkdir -p $DEST/usr/src/linux-$KVER/arch
+    for i in acpi asm-generic config drm linux math-emu media net pcmcia scsi sound video; do
+      cp -rf include/$i $DEST/usr/src/linux-$KVER/include/
+    done
+    cp -rf arch/x86 $DEST/usr/src/linux-$KVER/arch/
+    cp -rf scripts Makefile KBuild Module.symvers .config $DEST/usr/src/linux-$KVER/
+    # fix permissions on scripts dir
+    chmod 755 -R $DEST/usr/src/linux-$KVER/scripts
+    # add media/video headers
+    mkdir -p $DEST/usr/src/linux-$KVER/drivers/media/video
+    for i in $(find drivers/media/video -name "*.h"); do
+      mkdir -p $DEST/usr/src/linux-$KVER/$(dirname $i)
+      cp $i $DEST/usr/src/linux-$KVER/$i
+    done
+    # add md headers
+    mkdir -p $DEST/usr/src/linux-$KVER/drivers/md
+    cp drivers/md/*.h $DEST/usr/src/linux-$KVER/drivers/md
+    # add wireless headers
+    mkdir -p $DEST/usr/src/linux-$KVER/net/mac80211/
+    cp net/mac80211/*.h $DEST/usr/src/linux-$KVER/net/mac80211/
+    # add CLUSTERIP file for iptables
+    mkdir -p $DEST/usr/src/linux-$KVER/net/ipv4/netfilter/
+    cp net/ipv4/netfilter/ipt_CLUSTERIP.c $DEST/usr/src/linux-$KVER/net/ipv4/netfilter/
+    # copy Kconfig files
+    for i in $(find . -name "Kconfig*"); do
+      mkdir -p $DEST/usr/src/linux-$KVER/$(dirname $i)
+      cp $i $DEST/usr/src/linux-$KVER/$i
+    done
+    # delete the kernel binary in the sources
+    rm -f $DEST/usr/src/linux-$KVER/arch/x86/boot/compressed/vmlinux $DEST/usr/src/linux-$KVER/arch/x86/boot/compressed/vmlinux.bin* $DEST/usr/src/linux-$KVER/arch/x86/boot/vmlinux.bin $DEST/usr/src/linux-$KVER/arch/x86/boot/bzImage
+    # delete all .o files
+    for i in $(find $DEST/usr/src/linux-$KVER -name '*.o'); do
+      rm -f $i
+    done
+  )
   # fix build and source link in /lib/modules/XXX/
-  cd $DEST/lib/modules/$KVEREXTRA/
-  rm -f build && ln -s /usr/src/linux-$KVER build
-  rm -f source && ln -s /usr/src/linux-$KVER source
-} 
+  (
+    cd $DEST/lib/modules/$KVEREXTRA/
+    rm -f build && ln -s /usr/src/linux-$KVER build
+    rm -f source && ln -s /usr/src/linux-$KVER source
+  )
+}
