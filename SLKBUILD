@@ -117,7 +117,7 @@ EOF
     cd $SRC/linuxsrc
     mkdir -p $DEST/usr/src/linux-$KVER/include
     mkdir -p $DEST/usr/src/linux-$KVER/arch
-    for i in acpi asm-generic config drm linux math-emu media net pcmcia scsi sound video; do
+    for i in acpi asm-generic config drm generated linux math-emu media net pcmcia scsi sound trace video; do
       cp -rf include/$i $DEST/usr/src/linux-$KVER/include/
     done
     cp -rf arch/x86 $DEST/usr/src/linux-$KVER/arch/
