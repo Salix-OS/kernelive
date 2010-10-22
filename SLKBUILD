@@ -35,44 +35,49 @@ build() {
   echo "Cloning /usr/src/linux-$KVER..."
   echo '########################################'
   cp -a /usr/src/linux-$KVER $SRC/linuxsrc || exit 1
-  cd $SRC/linuxsrc
-  # clean the kernel
-  make mrproper || exit 1
-  # patch the kernel to use a new FS : aufs (an unionfs like filesystem)
-  echo '* Applying aufs2-kbuild.patch... *'
-  patch -p1 < $SRC/aufs2-standalone/aufs2-kbuild.patch || exit 1
-  echo '* Applying aufs2-base.patch... *'
-  patch -p1 < $SRC/aufs2-standalone/aufs2-base.patch || exit 1
-  cp -r $SRC/aufs2-standalone/{Documentation,fs,include} . || exit 1
-  # patch the squashfs to use a decompressor wrapper and in particular lzma.
-  # patch for lzma to be used outside initrd/initramfs.
-  echo '* Applying squashfs-lzam patches... *'
-  patch -p1 < $SRC/01-Squashfs-Move_zlib_decompression_wrapper_code_into_a_separate_file.patch || exit 1
-  patch -p1 < $SRC/02-Squashfs-Factor_out_remaining_zlib_dependencies_into_separate_wrapper_file.patch || exit 1
-  patch -p1 < $SRC/03-Squashfs-Add_a_decompressor_framework.patch || exit 1
-  patch -p1 < $SRC/04-Squashfs-Add_decompressor_entries_for_lzma_and_lzo.patch || exit 1
-  patch -p1 < $SRC/05-Squashfs-Add_support_for_LZMA_compressed_filesystems.patch || exit 1
-  patch -p1 < $SRC/06-lzma-Make_lzma_available_to_non_initramfs_initrd_code.patch || exit 1
-  patch -p1 < $SRC/07-Squashfs-Select_DECOMPRESS_LZMA_NEEDED_when_including_support_for_lzma.patch || exit 1
-  patch -p1 < $SRC/08-lzma-Make_lzma_reentrant.patch || exit 1
-  # use a suitable configuration for live environnement.
-  cp $SRC/config-$KVEREXTRA.live .config
-  make oldconfig scripts prepare || exit 1
-  # compile the kernel (without squashfs for now)
-  echo '########################################'
-  echo "Compiling modules..."
-  echo '########################################'
-  make -j $nbthreads modules || exit 1
-  echo '########################################'
-  echo "Compiling kernel image..."
-  echo '########################################'
-  make -j $nbthreads bzImage || exit 1
-  export INSTALL_MOD_PATH=$DEST
-  echo '########################################'
-  echo "Installing modules..."
-  echo '########################################'
-  make modules_install || exit 1
-  unset INSTALL_MOD_PATH
+  (
+    ARCH_BAK=$ARCH
+    [ "$ARCH" = "i486" ] && ARCH=x86
+    cd $SRC/linuxsrc
+    # clean the kernel
+    make mrproper || exit 1
+    # patch the kernel to use a new FS : aufs (an unionfs like filesystem)
+    echo '* Applying aufs2-kbuild.patch... *'
+    patch -p1 < $SRC/aufs2-standalone/aufs2-kbuild.patch || exit 1
+    echo '* Applying aufs2-base.patch... *'
+    patch -p1 < $SRC/aufs2-standalone/aufs2-base.patch || exit 1
+    cp -r $SRC/aufs2-standalone/{Documentation,fs,include} . || exit 1
+    # patch the squashfs to use a decompressor wrapper and in particular lzma.
+    # patch for lzma to be used outside initrd/initramfs.
+    echo '* Applying squashfs-lzam patches... *'
+    patch -p1 < $SRC/01-Squashfs-Move_zlib_decompression_wrapper_code_into_a_separate_file.patch || exit 1
+    patch -p1 < $SRC/02-Squashfs-Factor_out_remaining_zlib_dependencies_into_separate_wrapper_file.patch || exit 1
+    patch -p1 < $SRC/03-Squashfs-Add_a_decompressor_framework.patch || exit 1
+    patch -p1 < $SRC/04-Squashfs-Add_decompressor_entries_for_lzma_and_lzo.patch || exit 1
+    patch -p1 < $SRC/05-Squashfs-Add_support_for_LZMA_compressed_filesystems.patch || exit 1
+    patch -p1 < $SRC/06-lzma-Make_lzma_available_to_non_initramfs_initrd_code.patch || exit 1
+    patch -p1 < $SRC/07-Squashfs-Select_DECOMPRESS_LZMA_NEEDED_when_including_support_for_lzma.patch || exit 1
+    patch -p1 < $SRC/08-lzma-Make_lzma_reentrant.patch || exit 1
+    # use a suitable configuration for live environnement.
+    cp $SRC/config-$KVEREXTRA.live .config
+    make oldconfig scripts prepare || exit 1
+    # compile the kernel (without squashfs for now)
+    echo '########################################'
+    echo "Compiling modules..."
+    echo '########################################'
+    make -j $nbthreads modules || exit 1
+    echo '########################################'
+    echo "Compiling kernel image..."
+    echo '########################################'
+    make -j $nbthreads bzImage || exit 1
+    export INSTALL_MOD_PATH=$DEST
+    echo '########################################'
+    echo "Installing modules..."
+    echo '########################################'
+    make modules_install || exit 1
+    unset INSTALL_MOD_PATH
+    ARCH=$ARCH_BAK
+  )
   # copy the kernel
   cd $DEST
   mkdir -p boot
