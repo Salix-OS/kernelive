@@ -1,13 +1,12 @@
 This kernel is the same as the kernel-huge from slackware.
 It just have the following additions:
 - aufs2 filesystem support : http://aufs.sourceforge.net/
-- lzma compression support for squashfs by Phillip Lougher :
-  * 0: http://lkml.org/lkml/2009/12/10/456
-  * 1: http://lkml.org/lkml/2009/12/10/462
-  * 2: http://lkml.org/lkml/2009/12/10/467
-  * 3: http://lkml.org/lkml/2009/12/10/459
-  * 4: http://lkml.org/lkml/2009/12/10/464
-  * 5: http://lkml.org/lkml/2009/12/10/466
-  * 6: http://lkml.org/lkml/2009/12/10/457
-  * 7: http://lkml.org/lkml/2009/12/10/458
-  * 8: http://lkml.org/lkml/2009/12/10/465
+- lzma compression support for squashfs, patched by Cyrille Pontvieux based on the patch by Phillip Lougher:
+  * http://marc.info/?l=linux-fsdevel&m=126049544600760&w=2
+  * http://marc.info/?l=linux-kernel&m=126282556400666&w=2
+  * http://marc.info/?l=linux-kernel&m=126049538900666&w=2
+  * http://marc.info/?l=linux-fsdevel&m=126049544400738&w=2
+I also used the following patches for making it work for 2.6.36 after reading it myself to approve the patch (it's better than not reading):
+http://chakra-project.org/sources/kernel26/patch-2.6.36-3-CHAKRA.bz2
+
+Lougher messages on LKML: http://marc.info/?a=103594540500001&r=1&w=2

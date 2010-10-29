@@ -7,7 +7,7 @@ pkgname=kernelive
 pkgver=$(echo $KVER|tr - .)
 pkgrel=1cp
 #arch=noarch
-source=(config-$KVER.live config-$KVER.live.patch aufs2-standalone-$(echo $KVER|sed 's/\([^.]*\.[^.]*\.[^.]*\)\..*/\1/').tar.gz modules.conf 01-Squashfs-Move_zlib_decompression_wrapper_code_into_a_separate_file.patch 02-Squashfs-Factor_out_remaining_zlib_dependencies_into_separate_wrapper_file.patch 03-Squashfs-Add_a_decompressor_framework.patch 04-Squashfs-Add_decompressor_entries_for_lzma_and_lzo.patch 05-Squashfs-Add_support_for_LZMA_compressed_filesystems.patch 06-lzma-Make_lzma_available_to_non_initramfs_initrd_code.patch 07-Squashfs-Select_DECOMPRESS_LZMA_NEEDED_when_including_support_for_lzma.patch 08-lzma-Make_lzma_reentrant.patch)
+source=(config-$KVER.live config-$KVER.live.patch aufs2-standalone-$(echo $KVER|sed 's/\([^.]*\.[^.]*\.[^.]*\)[-.].*/\1/').tar.gz modules.conf aufs2-standalone-2.6.36.patch squashfs-lzma.patch)
 sourcetemplate=http://enialis.net/~jrd/salix/$pkgname/$pkgver-\$arch-$pkgrel/
 docs=("INFOS" "readme" "copying")
 
@@ -34,14 +34,16 @@ build() {
   echo '########################################'
   echo "Cloning /usr/src/linux-$KVER..."
   echo '########################################'
-  cp -a /usr/src/linux-$KVER $SRC/linuxsrc || exit 1
+  rsync --inplace --progress -a /usr/src/linux-$KVER/ $SRC/linuxsrc/ || exit 1
   (
     ARCH_BAK=$ARCH
-    [ "$ARCH" = "i486" ] && ARCH=x86
+    unset ARCH
     cd $SRC/linuxsrc
     # clean the kernel
     make mrproper || exit 1
     # patch the kernel to use a new FS : aufs (an unionfs like filesystem)
+    # first patch aufs2 patches to be used for 2.6.36
+    (cd $SRC/aufs2-standalone; patch -p0 < $SRC/aufs2-standalone-2.6.36.patch || exit 1)
     echo '* Applying aufs2-kbuild.patch... *'
     patch -p1 < $SRC/aufs2-standalone/aufs2-kbuild.patch || exit 1
     echo '* Applying aufs2-base.patch... *'
@@ -49,18 +51,13 @@ build() {
     cp -r $SRC/aufs2-standalone/{Documentation,fs,include} . || exit 1
     # patch the squashfs to use a decompressor wrapper and in particular lzma.
     # patch for lzma to be used outside initrd/initramfs.
-    echo '* Applying squashfs-lzam patches... *'
-    patch -p1 < $SRC/01-Squashfs-Move_zlib_decompression_wrapper_code_into_a_separate_file.patch || exit 1
-    patch -p1 < $SRC/02-Squashfs-Factor_out_remaining_zlib_dependencies_into_separate_wrapper_file.patch || exit 1
-    patch -p1 < $SRC/03-Squashfs-Add_a_decompressor_framework.patch || exit 1
-    patch -p1 < $SRC/04-Squashfs-Add_decompressor_entries_for_lzma_and_lzo.patch || exit 1
-    patch -p1 < $SRC/05-Squashfs-Add_support_for_LZMA_compressed_filesystems.patch || exit 1
-    patch -p1 < $SRC/06-lzma-Make_lzma_available_to_non_initramfs_initrd_code.patch || exit 1
-    patch -p1 < $SRC/07-Squashfs-Select_DECOMPRESS_LZMA_NEEDED_when_including_support_for_lzma.patch || exit 1
-    patch -p1 < $SRC/08-lzma-Make_lzma_reentrant.patch || exit 1
+    echo '* Applying squashfs-lzma patches... *'
+    patch -p0 < $SRC/squashfs-lzma.patch || exit 1
     # use a suitable configuration for live environnement.
     cp $SRC/config-$KVEREXTRA.live .config
     make oldconfig scripts prepare || exit 1
+    echo "about to compile..."
+    read R
     # compile the kernel (without squashfs for now)
     echo '########################################'
     echo "Compiling modules..."
@@ -78,6 +75,9 @@ build() {
     unset INSTALL_MOD_PATH
     ARCH=$ARCH_BAK
   )
+  if [ $? -ne 0 ]; then
+    exit 1
+  fi
   # copy the kernel
   cd $DEST
   mkdir -p boot
@@ -126,7 +126,7 @@ EOF
       cp -rf include/$i $DEST/usr/src/linux-$KVER/include/
     done
     cp -rf arch/x86 $DEST/usr/src/linux-$KVER/arch/
-    cp -rf scripts Makefile KBuild Module.symvers .config $DEST/usr/src/linux-$KVER/
+    cp -rf scripts Makefile Kbuild Module.symvers .config $DEST/usr/src/linux-$KVER/
     # fix permissions on scripts dir
     chmod 755 -R $DEST/usr/src/linux-$KVER/scripts
     # add media/video headers
