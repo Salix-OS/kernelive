@@ -7,7 +7,7 @@ pkgname=kernelive
 pkgver=$(echo $KVER|tr - .)
 pkgrel=1cp
 #arch=noarch
-source=(config-$KVER.live config-$KVER.live.patch aufs2-standalone-$(echo $KVER|sed 's/\([^.]*\.[^.]*\.[^.]*\)[-.].*/\1/').tar.gz modules.conf aufs2-standalone-2.6.36.patch squashfs-lzma.patch)
+source=(config-$KVER.live config-$KVER.live.patch aufs2-standalone-$(echo $KVER|sed 's/\([^.]*\.[^.]*\.[^.]*\)[-.].*/\1/').tar.gz modules.conf squashfs-xz-$(echo $KVER|sed 's/\([^.]*\.[^.]*\.[^.]*\)[-.].*/\1/').patch)
 sourcetemplate=http://enialis.net/~jrd/salix/$pkgname/$pkgver-\$arch-$pkgrel/
 docs=("INFOS" "readme" "copying")
 
@@ -16,11 +16,11 @@ slackdesc=\
 #|-----handy-ruler------------------------------------------------------|
 "$pkgname (Linux kernel for Salix Live)"
 "Linux kernel for Salix Live is compiled with support for"
-"squashfs, lzma & aufs2 as well as for most hardware, "
+"squashfs, xz & aufs2 as well as for most hardware, "
 "including SCSI, USB booting devices, etc.. "
 ""
 "This is the same kernel config as kernel-huge but with aufs2 FS and"
-"squashfs+lzma FS patches."
+"squashfs+xz FS patches."
 )
 
 
@@ -42,17 +42,15 @@ build() {
     # clean the kernel
     make mrproper || exit 1
     # patch the kernel to use a new FS : aufs (an unionfs like filesystem)
-    # first patch aufs2 patches to be used for 2.6.36
-    (cd $SRC/aufs2-standalone; patch -p0 < $SRC/aufs2-standalone-2.6.36.patch || exit 1)
     echo '* Applying aufs2-kbuild.patch... *'
     patch -p1 < $SRC/aufs2-standalone/aufs2-kbuild.patch || exit 1
     echo '* Applying aufs2-base.patch... *'
     patch -p1 < $SRC/aufs2-standalone/aufs2-base.patch || exit 1
     cp -r $SRC/aufs2-standalone/{Documentation,fs,include} . || exit 1
-    # patch the squashfs to use a decompressor wrapper and in particular lzma.
-    # patch for lzma to be used outside initrd/initramfs.
-    echo '* Applying squashfs-lzma patches... *'
-    patch -p0 < $SRC/squashfs-lzma.patch || exit 1
+    # patch the squashfs to use a decompressor wrapper and in particular xz.
+    # patch for xz to be used outside initrd/initramfs.
+    echo '* Applying squashfs-xz patches... *'
+    patch -p1 < $SRC/squashfs-xz-*.patch || exit 1
     # use a suitable configuration for live environnement.
     cp $SRC/config-$KVEREXTRA.live .config
     make oldconfig scripts prepare || exit 1
