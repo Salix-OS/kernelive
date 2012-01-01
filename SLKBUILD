@@ -115,12 +115,12 @@ EOF
   unset MODULECONF
   # copy the kernel source outside the SLKBUILD tree to keep it.
   cp -r $SRC/linuxsrc $startdir/
-  # copy files necessary for later builds, like nvidia and vmware
+  # copy files necessary for later builds, like nvidia, ati, vbox and vmware
   (
     cd $SRC/linuxsrc
     mkdir -p $DEST/usr/src/linux-$KVER/include
     mkdir -p $DEST/usr/src/linux-$KVER/arch
-    for i in acpi asm-generic config drm generated linux math-emu media net pcmcia scsi sound trace video; do
+    for i in acpi asm-generic config drm generated linux math-emu media net pcmcia scsi sound trace video xen; do
       cp -rf include/$i $DEST/usr/src/linux-$KVER/include/
     done
     cp -rf arch/x86 $DEST/usr/src/linux-$KVER/arch/
