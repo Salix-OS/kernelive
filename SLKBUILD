@@ -1,15 +1,16 @@
 # vim: set syn=sh:
 #Maintainer: JRD <jrd@enialis.net>
-# Use fake-uname to match the kernel version you want to compile
+# Use fake-uname to match the kernel version you want to compile, or use the KVER variable
+# Build deps: git,kernel-source
 
-KVER=$(uname -r)
+_kver=$([ -n "$KVER" ] && echo $KVER || uname -r)
 pkgname=kernelive
-pkgver=$(echo $KVER|tr - .)
+pkgver=$(echo $_kver|tr - .)
 pkgrel=1cp
-#arch=noarch
-source=(config-$KVER.live config-$KVER.live.patch aufs2-standalone-$(echo $KVER|sed 's/\([^.]*\.[^.]*\.[^.]*\)[-.].*/\1/').tar.gz modules.conf squashfs-xz-$(echo $KVER|sed 's/\([^.]*\.[^.]*\.[^.]*\)[-.].*/\1/').patch)
-sourcetemplate=http://enialis.net/~jrd/salix/$pkgname/$pkgver-\$arch-$pkgrel/
-docs=("INFOS" "readme" "copying")
+source=(config-$_kver.live.patch)
+_aufsrepo=git://aufs.git.sourceforge.net/gitroot/aufs/aufs3-standalone.git
+sourcetemplate=http://people.salixos.org/jrd/salix/$pkgname/$pkgver-\$arch-$pkgrel/
+docs=("readme" "copying")
 
 slackdesc=\
 (
@@ -20,21 +21,42 @@ slackdesc=\
 "including SCSI, USB booting devices, etc.. "
 ""
 "This is the same kernel config as kernel-huge but with aufs2 FS and"
-"squashfs+xz FS patches."
+"with squashfs compiled inline."
 )
 
-
 build() {
-  export KVEREXTRA=$(uname -r)
-  export KVER=$(echo $KVEREXTRA|sed 's/\(.*\)-.*/\1/')
-  export SRC=$startdir/src
-  export DEST=$startdir/pkg
-  export nbthreads=$(cat /proc/cpuinfo | grep ^processor | wc -l)
+  export KVER=$_kver
+  export TKVER=$(echo $_kver|sed 's/-.*//') # remove the -smp
+  # checking for kernel configuration
+  echo '########################################'
+  echo "Checking for kernel config..."
+  echo '########################################'
+  if [ -r $startdir/config-$KVER ]; then
+    echo "Copying $startdir/config-$KVER into $SRC/config..."
+    cp $startdir/config-$KVER $SRC/config
+  else
+    echo "$startdir/config-$KVER is missing" >&2
+    echo "Please copy the kernel ($KVER) configuration from /boot/." >&2
+    exit 1
+  fi
   # clone the kernel
   echo '########################################'
-  echo "Cloning /usr/src/linux-$KVER..."
+  echo "Checking for linux-$TKVER..."
   echo '########################################'
-  rsync --inplace --progress -a /usr/src/linux-$KVER/ $SRC/linuxsrc/ || exit 1
+  if [ -d $startdir/linux-$TKVER ]; then
+    echo "Copying $startdir/linux-$TKVER into $SRC/linuxsrc..."
+    echo "This could takes time"
+    cp -a $startdir/linux-$TKVER $SRC/linuxsrc
+  else
+    echo "$startdir/linux-$TKVER is missing" >&2
+    echo "Please copy the source of the Linux kernel $TKVER in it (or use a symlink)." >&2
+    exit 1
+  fi
+  git clone -n $_aufsrepo aufs || exit 1
+  (
+    cd aufs
+    git checkout aufs$(echo $TKVER|cut -d. -f1-2) || (echo "No branch exist in aufs for your kernel version" >&2; exit 1)
+  )
   (
     ARCH_BAK=$ARCH
     unset ARCH
@@ -42,122 +64,240 @@ build() {
     # clean the kernel
     make mrproper || exit 1
     # patch the kernel to use a new FS : aufs (an unionfs like filesystem)
-    echo '* Applying aufs2-kbuild.patch... *'
-    patch -p1 < $SRC/aufs2-standalone/aufs2-kbuild.patch || exit 1
-    echo '* Applying aufs2-base.patch... *'
-    patch -p1 < $SRC/aufs2-standalone/aufs2-base.patch || exit 1
-    cp -r $SRC/aufs2-standalone/{Documentation,fs,include} . || exit 1
-    # patch the squashfs to use a decompressor wrapper and in particular xz.
-    # patch for xz to be used outside initrd/initramfs.
-    echo '* Applying squashfs-xz patches... *'
-    patch -p1 < $SRC/squashfs-xz-*.patch || exit 1
+    echo '* Applying aufs3-kbuild.patch... *'
+    patch -p1 -i $SRC/aufs/aufs3-kbuild.patch || exit 1
+    echo '* Applying aufs3-base.patch... *'
+    patch -p1 -i $SRC/aufs/aufs3-base.patch || exit 1
+    echo '* Applying aufs3-proc_map.patch... *'
+    patch -p1 -i $SRC/aufs/aufs3-proc_map.patch || exit 1
+    cp -r $SRC/aufs/{Documentation,fs} . || exit 1
+    cp $SRC/aufs/include/linux/aufs_type.h include/linux/ || exit 1
     # use a suitable configuration for live environnement.
-    cp $SRC/config-$KVEREXTRA.live .config
+    cp $SRC/config .config
+    patch -p0 -i $SRC/config-$KVER.live.patch || exit 1
     make oldconfig scripts prepare || exit 1
-    echo "about to compile..."
-    read R
-    # compile the kernel (without squashfs for now)
+    # compile the kernel
     echo '########################################'
     echo "Compiling modules..."
     echo '########################################'
-    make -j $nbthreads modules || exit 1
+    make -j $numjobs modules || exit 1
     echo '########################################'
     echo "Compiling kernel image..."
     echo '########################################'
-    make -j $nbthreads bzImage || exit 1
-    export INSTALL_MOD_PATH=$DEST
+    make -j $numjobs bzImage || exit 1
+    export INSTALL_MOD_PATH=$PKG
     echo '########################################'
     echo "Installing modules..."
     echo '########################################'
     make modules_install || exit 1
     unset INSTALL_MOD_PATH
     ARCH=$ARCH_BAK
-  )
-  if [ $? -ne 0 ]; then
-    exit 1
-  fi
+  ) || exit 1
   # copy the kernel
-  cd $DEST
+  echo '########################################'
+  echo "Copy the kernel..."
+  echo '########################################'
+  cd $PKG
   mkdir -p boot
   (
     cd boot
-    cp $SRC/linuxsrc/.config config-$KVEREXTRA
-    cp $SRC/linuxsrc/System.map System.map-$KVEREXTRA
-    cp $SRC/linuxsrc/arch/x86/boot/bzImage vmlinuz-$KVEREXTRA
-    ln -s config-$KVEREXTRA config
-    ln -s System.map-$KVEREXTRA System.map
-    ln -s vmlinuz-$KVEREXTRA vmlinuz
-  )
+    cp $SRC/linuxsrc/.config config-$KVER
+    cp $SRC/linuxsrc/System.map System.map-$KVER
+    cp $SRC/linuxsrc/arch/x86/boot/bzImage vmlinuz-$KVER
+    ln -s config-$KVER config
+    ln -s System.map-$KVER System.map
+    ln -s vmlinuz-$KVER vmlinuz
+  ) || exit 1
+  echo '########################################'
+  echo "modules.dep, modules.symbols and rc.modules..."
+  echo '########################################'
+  depmod -a -b $PKG -F $PKG/boot/System.map $KVER || exit 1
   # create rc.modules
   mkdir -p etc/rc.d
   cat << EOF > etc/rc.d/rc.modules
 #!/bin/sh
 # rc.modules   $(date) <Generated by kernelive>
 #
-# This file loads extra drivers into the Linux kernel.
-# As kmod and udev handle module loading, this file will be mostly
-# commented out, but is still useful for loading selected modules at boot time.
-#
-
 RELEASE=\$(uname -r)
-
-echo "Updating module dependencies for Linux \$RELEASE"
-
+echo "Updating module dependencies for Linux \$RELEASE:"
 /sbin/depmod -A
-
+### Fuse, ACPI ###
 EOF
-  sed -e "s@_ROOT_@$DEST@ ; s/_KVER_/${KVEREXTRA}/" $SRC/modules.conf > $DEST/modules.conf
-  export MODULECONF=$DEST/modules.conf
-  depmod -a -b $DEST -F $DEST/boot/System.map $KVEREXTRA || exit 1
-  modprobe -l | sed -e "s/^.*\/\(.*\)\.ko$/# \/sbin\/modprobe \1/m ; s/# \(.* ac$\)/\1/ ; s/# \(.* battery$\)/\1/ ; s/# \(.* button$\)/\1/ ; s/# \(.* fan$\)/\1/ ; s/# \(.* fuse$\)/\1/ ; s/# \(.* processor$\)/\1/ ; s/# \(.* thermal$\)/\1/ ; s/# \(.* video$\)/\1/ ; s/# \(.* lp$\)/\1/ ; s/# \(.* parport$\)/\1/ ; s/# \(.* parport_pc$\)/\1/ " | sort >> etc/rc.d/rc.modules
+  modules_enabled="fuse ac battery button video fan dock bay processor thermal asus_acpi thinkpad_acpi toshiba_acpi parport_pc lp agpgart"
+  find $PKG/lib/modules/$KVER -name '*.ko' | sed "s,$PKG/lib/modules/$KVER/,," | sed -e 's,^.*/\([^/]*\)\.ko$,# /sbin/modprobe \1,; s,# \(.*\) \('"$(echo "$modules_enabled"|sed 's/ /\\|/g')"'\)$,\1 -q \2,;' | sort >> etc/rc.d/rc.modules
+  cat << 'EOF' >> etc/rc.d/rc.modules
+### Filesystem Quota support ###
+if /bin/grep -q quota /etc/fstab ; then
+  # /sbin/modprobe quota_v1
+  /sbin/modprobe quota_v2
+fi
+### Network device support ###
+# Most of these drivers will probe automatically for the card if you don't
+# specify an I/O address and IRQ.  
+#
+# First, if setup probing found a network card, there may be an 'rc.netdevice'
+# file that we should run to load the network module:
+if [ -x /etc/rc.d/rc.netdevice ]; then
+  . /etc/rc.d/rc.netdevice
+fi
+### CPU frequency scaling support
+#
+# Below, set CPUFREQ to enable CPU frequency scaling to save system power.
+#
+# To always try to use CPU frequency scaling, set to:  on
+# To never use CPU frequency scaling, set to:  off
+# To use it only when the battery module is loaded (this will cause it to
+# be used by default with most laptops), set to:  battery
+#
+CPUFREQ=on
+
+# If CPUFREQ=battery and the battery module is loaded, turn on CPUfreq.
+if [ "$CPUFREQ" = "battery" ]; then
+  if /sbin/lsmod | grep -wq battery ; then
+    # CPUFREQ=battery and a battery was detected, so change CPUFREQ
+    # to 'on' so that the block of script below will try to enable it.
+    CPUFREQ=on
+  fi
+fi
+
+### Enable CPU frequency scaling if requested:
+if [ "$CPUFREQ" = "on" ]; then
+  ### CPU frequency scaling modules for the Linux kernel CPUfreq subsystem.
+  #
+  # Clock scaling allows you to change the clock speed of the CPUs on the fly.
+  # This is a nice method to save battery power, because the lower the clock
+  # speed is, the less power the CPU consumes.
+  # 
+  # It should not hurt anything to try to load these modules.
+  #
+  # generic ACPI P-States based driver:
+  /sbin/modprobe acpi-cpufreq 2>/dev/null
+  # AMD mobile K6-2/3+ PowerNow!:
+  /sbin/modprobe powernow-k6 2>/dev/null
+  # AMD mobile Athlon PowerNow!:
+  /sbin/modprobe powernow-k7 2>/dev/null
+  # AMD Cool&Quiet PowerNow!:
+  /sbin/modprobe powernow-k8 2>/dev/null
+  # Intel SpeedStep using the SMI BIOS interface:
+  /sbin/modprobe speedstep-smi 2>/dev/null
+  # Intel SpeedStep on ICH-based chipsets:
+  /sbin/modprobe speedstep-ich 2>/dev/null
+  # Intel Enhanced SpeedStep :
+  /sbin/modprobe speedstep-centrino 2>/dev/null
+  # Intel Pentium4/Xeon clock modulation is not enabled by default.
+  # The kernel documentation says "This adds the CPUFreq driver for Intel
+  # Pentium 4 / XEON processors.  When enabled it will lower CPU temperature
+  # by skipping clocks.  This driver should be only used in exceptional
+  # circumstances when very low power is needed because it causes severe
+  # slowdowns and noticeable latencies.  Normally Speedstep should be used
+  # instead."
+  # If you still want to try the Pentium4/Xeon module, uncomment the next line:
+  #/sbin/modprobe p4-clockmod 2>/dev/null
+  # NatSemi Geode GX / Cyrix MediaGXm:
+  /sbin/modprobe gx-suspmod  2>/dev/null
+  # Transmeta Crusoe / Efficeon LongRun:
+  /sbin/modprobe longrun  2>/dev/null
+  # VIA Cyrix Longhaul:
+  /sbin/modprobe longhaul  2>/dev/null
+  # nForce2 FSB changing cpufreq driver:
+  /sbin/modprobe cpufreq-nforce2 2>/dev/null
+  # Enhanced PowerSaver driver for VIA C7 CPUs:
+  /sbin/modprobe e_powersaver 2>/dev/null
+
+  ### CPU frequency scaling policies:
+  #
+  # Use the CPUFreq governor 'powersave' as default.  This sets the
+  # frequency statically to the lowest frequency supported by the CPU.
+  #/sbin/modprobe cpufreq_powersave
+  #
+  # Use the CPUFreq governor 'performance' as default. This sets the
+  # frequency statically to the highest frequency supported by the CPU.
+  #/sbin/modprobe cpufreq_performance
+  #
+  # Use the CPUFreq governor 'conservative' as default.  This allows you
+  # to get a full dynamic frequency capable system by simply loading your
+  # cpufreq low-level hardware driver.  Be aware that not all cpufreq
+  # drivers support the 'conservative' governor -- the fallback governor
+  # will be the 'performance' governor.
+  #/sbin/modprobe cpufreq_conservative
+  #
+  # Use the CPUFreq governor 'ondemand' as default.  This allows you to
+  # get a full dynamic frequency capable system by simply loading your
+  # cpufreq low-level hardware driver.  Be aware that not all cpufreq
+  # drivers support the 'ondemand' governor -- the fallback governor will
+  # be the performance governor.  This seems to be the most-recommended
+  # scaling policy, so rc.modules will try to load this by default.
+  /sbin/modprobe cpufreq_ondemand 2>/dev/null
+
+  ### CPU scaling governor:
+  #
+  # Set the default scaling_governor to be used (such as userspace or ondemand)
+  # if there is a CPUFreq scaling policy module loaded that supports it:
+  SCALING_GOVERNOR=ondemand
+  #
+  # Try to enable the scaling_governor selected above:
+  if [ -r /sys/devices/system/cpu/cpu0/cpufreq/scaling_available_governors ]; then
+    if grep -wq "$SCALING_GOVERNOR" /sys/devices/system/cpu/cpu0/cpufreq/scaling_available_governors ; then
+      if [ -r /sys/devices/system/cpu/cpu0/cpufreq/scaling_governor ]; then
+        for SYSCPUFILE in /sys/devices/system/cpu/cpu*/cpufreq/scaling_governor ; do
+          echo "$SCALING_GOVERNOR" > $SYSCPUFILE
+        done
+      fi
+    fi
+  fi
+
+fi # End enabling CPU scaling support
+
+# We are done with these variables now:
+unset NEWMODS RELEASE CPUFREQ SCALING_GOVERNOR SYSCPUFILE
+EOF
   chmod 755 etc/rc.d/rc.modules
-  rm -rf $DEST/modules.conf $DEST/persist
-  unset MODULECONF
-  # copy the kernel source outside the SLKBUILD tree to keep it.
-  cp -r $SRC/linuxsrc $startdir/
-  # copy files necessary for later builds, like nvidia, ati, vbox and vmware
+  echo '########################################'
+  echo "Kernel headers..."
+  echo '########################################'
+  # copy files necessary for later builds, like nvidia, ati, vbox and vmware without the need for kernel-source
   (
     cd $SRC/linuxsrc
-    mkdir -p $DEST/usr/src/linux-$KVER/include
-    mkdir -p $DEST/usr/src/linux-$KVER/arch
+    mkdir -p $PKG/usr/src/linux-$TKVER/include
+    mkdir -p $PKG/usr/src/linux-$TKVER/arch
     for i in acpi asm-generic config drm generated linux math-emu media net pcmcia scsi sound trace video xen; do
-      cp -rf include/$i $DEST/usr/src/linux-$KVER/include/
+      cp -rf include/$i $PKG/usr/src/linux-$TKVER/include/
     done
-    cp -rf arch/x86 $DEST/usr/src/linux-$KVER/arch/
-    cp -rf scripts Makefile Kbuild Module.symvers .config $DEST/usr/src/linux-$KVER/
+    cp -rf arch/x86 $PKG/usr/src/linux-$TKVER/arch/
+    cp -rf scripts Makefile Kbuild Module.symvers .config $PKG/usr/src/linux-$TKVER/
     # fix permissions on scripts dir
-    chmod 755 -R $DEST/usr/src/linux-$KVER/scripts
+    chmod 755 -R $PKG/usr/src/linux-$TKVER/scripts
     # add media/video headers
-    mkdir -p $DEST/usr/src/linux-$KVER/drivers/media/video
+    mkdir -p $PKG/usr/src/linux-$TKVER/drivers/media/video
     for i in $(find drivers/media/video -name "*.h"); do
-      mkdir -p $DEST/usr/src/linux-$KVER/$(dirname $i)
-      cp $i $DEST/usr/src/linux-$KVER/$i
+      mkdir -p $PKG/usr/src/linux-$TKVER/$(dirname $i)
+      cp $i $PKG/usr/src/linux-$TKVER/$i
     done
     # add md headers
-    mkdir -p $DEST/usr/src/linux-$KVER/drivers/md
-    cp drivers/md/*.h $DEST/usr/src/linux-$KVER/drivers/md
+    mkdir -p $PKG/usr/src/linux-$TKVER/drivers/md
+    cp drivers/md/*.h $PKG/usr/src/linux-$TKVER/drivers/md
     # add wireless headers
-    mkdir -p $DEST/usr/src/linux-$KVER/net/mac80211/
-    cp net/mac80211/*.h $DEST/usr/src/linux-$KVER/net/mac80211/
+    mkdir -p $PKG/usr/src/linux-$TKVER/net/mac80211/
+    cp net/mac80211/*.h $PKG/usr/src/linux-$TKVER/net/mac80211/
     # add CLUSTERIP file for iptables
-    mkdir -p $DEST/usr/src/linux-$KVER/net/ipv4/netfilter/
-    cp net/ipv4/netfilter/ipt_CLUSTERIP.c $DEST/usr/src/linux-$KVER/net/ipv4/netfilter/
+    mkdir -p $PKG/usr/src/linux-$TKVER/net/ipv4/netfilter/
+    cp net/ipv4/netfilter/ipt_CLUSTERIP.c $PKG/usr/src/linux-$TKVER/net/ipv4/netfilter/
     # copy Kconfig files
     for i in $(find . -name "Kconfig*"); do
-      mkdir -p $DEST/usr/src/linux-$KVER/$(dirname $i)
-      cp $i $DEST/usr/src/linux-$KVER/$i
+      mkdir -p $PKG/usr/src/linux-$TKVER/$(dirname $i)
+      cp $i $PKG/usr/src/linux-$TKVER/$i
     done
     # delete the kernel binary in the sources
-    rm -f $DEST/usr/src/linux-$KVER/arch/x86/boot/compressed/vmlinux $DEST/usr/src/linux-$KVER/arch/x86/boot/compressed/vmlinux.bin* $DEST/usr/src/linux-$KVER/arch/x86/boot/vmlinux.bin $DEST/usr/src/linux-$KVER/arch/x86/boot/bzImage
+    rm -f $PKG/usr/src/linux-$TKVER/arch/x86/boot/compressed/vmlinux $PKG/usr/src/linux-$TKVER/arch/x86/boot/compressed/vmlinux.bin* $PKG/usr/src/linux-$TKVER/arch/x86/boot/vmlinux.bin $PKG/usr/src/linux-$TKVER/arch/x86/boot/bzImage
     # delete all .o files
-    for i in $(find $DEST/usr/src/linux-$KVER -name '*.o'); do
-      rm -f $i
+    for i in $(find $PKG/usr/src/linux-$TKVER -name '*.o'); do
+      rm -f "$i"
     done
   )
   # fix build and source link in /lib/modules/XXX/
   (
-    cd $DEST/lib/modules/$KVEREXTRA/
-    rm -f build && ln -s /usr/src/linux-$KVER build
-    rm -f source && ln -s /usr/src/linux-$KVER source
+    cd $PKG/lib/modules/$KVER/
+    rm -f build && ln -s /usr/src/linux-$TKVER build
+    rm -f source && ln -s /usr/src/linux-$TKVER source
   )
 }
