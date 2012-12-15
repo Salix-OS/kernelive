@@ -111,7 +111,7 @@ build() {
   echo '########################################'
   echo "modules.dep, modules.symbols and rc.modules..."
   echo '########################################'
-  depmod -a -b $PKG -F $PKG/boot/System.map $KVER || exit 1
+  /sbin/depmod -a -b $PKG -F $PKG/boot/System.map $KVER || exit 1
   # create rc.modules
   mkdir -p etc/rc.d
   cat << EOF > etc/rc.d/rc.modules
