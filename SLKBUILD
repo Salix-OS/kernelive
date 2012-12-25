@@ -9,6 +9,7 @@ pkgver=$(echo $_kver|tr - .)
 pkgrel=1cp
 source=(config-$_kver.live.patch)
 _aufsrepo=git://aufs.git.sourceforge.net/gitroot/aufs/aufs3-standalone.git
+_fwrepo=git://git.kernel.org/pub/scm/linux/kernel/git/dwmw2/linux-firmware.git
 sourcetemplate=http://people.salixos.org/jrd/salix/$pkgname/$pkgver-\$arch-$pkgrel/
 docs=("readme" "copying")
 
@@ -22,6 +23,7 @@ slackdesc=\
 ""
 "This is the same kernel config as kernel-huge but with aufs2 FS and"
 "with squashfs compiled inline."
+"Firmwares are also included and also some kernel headers."
 )
 
 build() {
@@ -75,7 +77,7 @@ build() {
     # use a suitable configuration for live environnement.
     cp $SRC/config .config
     patch -p0 -i $SRC/config-$KVER.live.patch || exit 1
-    make oldconfig scripts prepare || exit 1
+    make oldconfig scripts prepare || exit 
     # compile the kernel
     echo '########################################'
     echo "Compiling modules..."
@@ -293,6 +295,17 @@ EOF
     for i in $(find $PKG/usr/src/linux-$TKVER -name '*.o'); do
       rm -f "$i"
     done
+  )
+  echo '########################################'
+  echo "Kernel firmware..."
+  echo '########################################'
+  git clone $_fwrepo firmware || exit 1
+  mkdir -p $PKG/lib $PKG/usr/doc
+  rm -rf firmware/.git
+  cp -rf firmware $PKG/lib/
+  (
+    cd $PKG/usr/doc
+    ln -s /lib/firmware kernel-firmware-$(date +%Y%m%d)git
   )
   # fix build and source link in /lib/modules/XXX/
   (
