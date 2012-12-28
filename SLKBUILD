@@ -1,17 +1,16 @@
-# vim: set syn=sh:
+# vim: set et ai cin sw=2 ts=2 tw=0 syn=sh:
 #Maintainer: JRD <jrd@enialis.net>
 # Use fake-uname to match the kernel version you want to compile, or use the KVER variable
-# Build deps: git,kernel-source
+# Use SDATE for specifying the date of the source tarballs aufs and kernel-firmwares
 
 _kver=$([ -n "$KVER" ] && echo $KVER || uname -r)
+_sdate=$([ -n "$SDATE" ] && echo $SDATE || echo '2012-12-27')
 pkgname=kernelive
 pkgver=$(echo $_kver|tr - .)
 pkgrel=1cp
-source=(config-$_kver.live.patch)
-_aufsrepo=git://aufs.git.sourceforge.net/gitroot/aufs/aufs3-standalone.git
-_fwrepo=git://git.kernel.org/pub/scm/linux/kernel/git/dwmw2/linux-firmware.git
+source=(README config-${_kver}.live.patch aufs-$(echo $_kver|sed 's/-.*//')_${_sdate}.tar.xz kernel-firmwares-$(echo $_kver|sed 's/-.*//')_${_sdate}.tar.xz)
 sourcetemplate=http://people.salixos.org/jrd/salix/$pkgname/$pkgver-\$arch-$pkgrel/
-docs=("readme" "copying")
+options=('nostrip' 'noautodotnew' 'nosrcpack')
 
 slackdesc=\
 (
@@ -29,6 +28,7 @@ slackdesc=\
 build() {
   export KVER=$_kver
   export TKVER=$(echo $_kver|sed 's/-.*//') # remove the -smp
+  export SDATE=$_sdate
   # checking for kernel configuration
   echo '########################################'
   echo "Checking for kernel config..."
@@ -41,6 +41,9 @@ build() {
     echo "Please copy the kernel ($KVER) configuration from /boot/." >&2
     exit 1
   fi
+  rm $SRC/aufs-*.tar.xz $SRC/kernel-firmwares-*.tar.xz
+  mv $SRC/aufs-* $SRC/aufs
+  mv $SRC/kernel-firmwares-* $SRC/firmware
   # clone the kernel
   echo '########################################'
   echo "Checking for linux-$TKVER..."
@@ -54,11 +57,6 @@ build() {
     echo "Please copy the source of the Linux kernel $TKVER in it (or use a symlink)." >&2
     exit 1
   fi
-  git clone -n $_aufsrepo aufs || exit 1
-  (
-    cd aufs
-    git checkout aufs$(echo $TKVER|cut -d. -f1-2) || (echo "No branch exist in aufs for your kernel version" >&2; exit 1)
-  )
   (
     ARCH_BAK=$ARCH
     unset ARCH
@@ -299,13 +297,11 @@ EOF
   echo '########################################'
   echo "Kernel firmware..."
   echo '########################################'
-  git clone $_fwrepo firmware || exit 1
   mkdir -p $PKG/lib $PKG/usr/doc
-  rm -rf firmware/.git
-  cp -rf firmware $PKG/lib/
+  cp -r $SRC/firmware $PKG/lib/
   (
     cd $PKG/usr/doc
-    ln -s /lib/firmware kernel-firmware-$(date +%Y%m%d)git
+    ln -s /lib/firmware kernel-firmware-${SDATE}git
   )
   # fix build and source link in /lib/modules/XXX/
   (
@@ -313,4 +309,11 @@ EOF
     rm -f build && ln -s /usr/src/linux-$TKVER build
     rm -f source && ln -s /usr/src/linux-$TKVER source
   )
+  mkdir -p $PKG/usr/doc/$pkgname-$pkgver
+  cp $SRC/README $PKG/usr/doc/$pkgname-$pkgver/
+  cp $SRC/linuxsrc/COPYING $PKG/usr/doc/$pkgname-$pkgver/
+  cp $SRC/linuxsrc/MAINTAINERS $PKG/usr/doc/$pkgname-$pkgver/
+  echo '########################################'
+  echo "Done"
+  echo '########################################'
 }

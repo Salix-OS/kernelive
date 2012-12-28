@@ -1,4 +1,5 @@
 build-*
 kernelive-*
 linuxsrc
-
+aufs-*
+kernel-firmwares-*
