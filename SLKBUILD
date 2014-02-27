@@ -1,62 +1,66 @@
-# vim: set syn=sh:
-#Maintainer: JRD <jrd@enialis.net>
-# Use fake-uname to match the kernel version you want to compile
+#Maintainer: JRD <jrd@salixos.org>
+# vim: set syn=sh ft=sh et sw=2 sts=2 ts=2 tw=0:
 
-KVER=$(uname -r)
+_kver=3.10.17
+_aufscommit=ce9cff
 pkgname=kernelive
-pkgver=$(echo $KVER|tr - .)
+pkgver=$(echo $_kver|tr - .)
 pkgrel=1cp
-#arch=noarch
-source=(config-$KVER.live config-$KVER.live.patch aufs2-standalone-$(echo $KVER|sed 's/\([^.]*\.[^.]*\.[^.]*\)[-.].*/\1/').tar.gz modules.conf squashfs-xz-$(echo $KVER|sed 's/\([^.]*\.[^.]*\.[^.]*\)[-.].*/\1/').patch)
+_configname=config-huge$(uname -m|grep -q 64 || echo '-smp')-$_kver$(uname -m|grep -q 64 && echo '.x64').live
+source=(https://www.kernel.org/pub/linux/kernel/v3.x/linux-$_kver.tar.xz CVE-2004-0038.diff $_configname.xz $_configname.patch aufs3-standalone-$_aufscommit.tar.xz)
 sourcetemplate=http://enialis.net/~jrd/salix/$pkgname/$pkgver-\$arch-$pkgrel/
-docs=("INFOS" "readme" "copying")
+docs=("readme" "copying")
+options=('nostrip')
 
 slackdesc=\
 (
 #|-----handy-ruler------------------------------------------------------|
 "$pkgname (Linux kernel for Salix Live)"
 "Linux kernel for Salix Live is compiled with support for"
-"squashfs, xz & aufs2 as well as for most hardware, "
+"squashfs, xz & aufs3 as well as for most hardware, "
 "including SCSI, USB booting devices, etc.. "
 ""
-"This is the same kernel config as kernel-huge but with aufs2 FS and"
-"squashfs+xz FS patches."
+"This is the same kernel config as kernel-huge but with aufs3 FS patch."
 )
 
-
 build() {
-  export KVEREXTRA=$(uname -r)
-  export KVER=$(echo $KVEREXTRA|sed 's/\(.*\)-.*/\1/')
-  export SRC=$startdir/src
-  export DEST=$startdir/pkg
-  export nbthreads=$(cat /proc/cpuinfo | grep ^processor | wc -l)
-  # clone the kernel
-  echo '########################################'
-  echo "Cloning /usr/src/linux-$KVER..."
-  echo '########################################'
-  rsync --inplace --progress -a /usr/src/linux-$KVER/ $SRC/linuxsrc/ || exit 1
+  export KVER=$_kver
+  export KVEREXTRA=$KVER$(uname -m|grep -q 64 || echo '-smp')
+  export nbthreads=$(grep ^processor /proc/cpuinfo|wc -l)
+  mv $SRC/linux-$KVER $SRC/linuxsrc
   (
     ARCH_BAK=$ARCH
     unset ARCH
     cd $SRC/linuxsrc
-    # clean the kernel
-    make mrproper || exit 1
+    echo '* Applying CVE-2004-0038.diff... *'
+    patch -p1 -i $SRC/CVE-2004-0038.diff || exit 1
     # patch the kernel to use a new FS : aufs (an unionfs like filesystem)
-    echo '* Applying aufs2-kbuild.patch... *'
-    patch -p1 < $SRC/aufs2-standalone/aufs2-kbuild.patch || exit 1
-    echo '* Applying aufs2-base.patch... *'
-    patch -p1 < $SRC/aufs2-standalone/aufs2-base.patch || exit 1
-    cp -r $SRC/aufs2-standalone/{Documentation,fs,include} . || exit 1
-    # patch the squashfs to use a decompressor wrapper and in particular xz.
-    # patch for xz to be used outside initrd/initramfs.
-    echo '* Applying squashfs-xz patches... *'
-    patch -p1 < $SRC/squashfs-xz-*.patch || exit 1
+    for f in Documentation fs include/uapi/linux/aufs_type.h; do
+      mkdir -p $(dirname $f) || exit 1
+      cp -r $SRC/aufs3-standalone-$_aufscommit/$f $(dirname $f)/ || exit 1
+    done
+    echo '* Applying aufs3-kbuild.patch... *'
+    patch -p1 -i $SRC/aufs3-standalone-$_aufscommit/aufs3-kbuild.patch || exit 1
+    echo '* Applying aufs3-base.patch... *'
+    patch -p1 -i $SRC/aufs3-standalone-$_aufscommit/aufs3-base.patch || exit 1
+    echo '* Applying aufs3-mmap.patch... *'
+    # mm/freemap.c has been changed and the patch for it cannot be applied.
+    # So patch it with sed and remove the patch chunk from the patch file
+    sed -ri "/mmap_region/ {
+      i \
+			vma_get_file(vma);
+      N;
+      a \
+			vma_fput(vma);
+      }" mm/fremap.c || exit 1
+    sed -ri '\:^diff --git a/mm/fremap.c:,+13 d' $SRC/aufs3-standalone-$_aufscommit/aufs3-mmap.patch || exit 1
+    patch -p1 -i $SRC/aufs3-standalone-$_aufscommit/aufs3-mmap.patch || exit 1
     # use a suitable configuration for live environnement.
-    cp $SRC/config-$KVEREXTRA.live .config
+    cp $SRC/$_configname .config || exit 1
     make oldconfig scripts prepare || exit 1
     echo "about to compile..."
-    read R
-    # compile the kernel (without squashfs for now)
+    sleep 5
+    # compile the kernel
     echo '########################################'
     echo "Compiling modules..."
     echo '########################################'
@@ -65,11 +69,11 @@ build() {
     echo "Compiling kernel image..."
     echo '########################################'
     make -j $nbthreads bzImage || exit 1
-    export INSTALL_MOD_PATH=$DEST
+    export INSTALL_MOD_PATH=$PKG
     echo '########################################'
     echo "Installing modules..."
     echo '########################################'
-    make modules_install || exit 1
+    make -j $nbthreads modules_install || exit 1
     unset INSTALL_MOD_PATH
     ARCH=$ARCH_BAK
   )
@@ -77,16 +81,16 @@ build() {
     exit 1
   fi
   # copy the kernel
-  cd $DEST
+  cd $PKG
   mkdir -p boot
   (
     cd boot
-    cp $SRC/linuxsrc/.config config-$KVEREXTRA
-    cp $SRC/linuxsrc/System.map System.map-$KVEREXTRA
-    cp $SRC/linuxsrc/arch/x86/boot/bzImage vmlinuz-$KVEREXTRA
-    ln -s config-$KVEREXTRA config
-    ln -s System.map-$KVEREXTRA System.map
-    ln -s vmlinuz-$KVEREXTRA vmlinuz
+    cp $SRC/linuxsrc/.config config-huge-$KVEREXTRA
+    cp $SRC/linuxsrc/System.map System.map-huge-$KVEREXTRA
+    cp $SRC/linuxsrc/arch/x86/boot/bzImage vmlinuz-huge-$KVEREXTRA
+    ln -s config-huge-$KVEREXTRA config
+    ln -s System.map-huge-$KVEREXTRA System.map
+    ln -s vmlinuz-huge-$KVEREXTRA vmlinuz
   )
   # create rc.modules
   mkdir -p etc/rc.d
@@ -106,57 +110,68 @@ echo "Updating module dependencies for Linux \$RELEASE"
 /sbin/depmod -A
 
 EOF
-  sed -e "s@_ROOT_@$DEST@ ; s/_KVER_/${KVEREXTRA}/" $SRC/modules.conf > $DEST/modules.conf
-  export MODULECONF=$DEST/modules.conf
-  depmod -a -b $DEST -F $DEST/boot/System.map $KVEREXTRA || exit 1
-  modprobe -l | sed -e "s/^.*\/\(.*\)\.ko$/# \/sbin\/modprobe \1/m ; s/# \(.* ac$\)/\1/ ; s/# \(.* battery$\)/\1/ ; s/# \(.* button$\)/\1/ ; s/# \(.* fan$\)/\1/ ; s/# \(.* fuse$\)/\1/ ; s/# \(.* processor$\)/\1/ ; s/# \(.* thermal$\)/\1/ ; s/# \(.* video$\)/\1/ ; s/# \(.* lp$\)/\1/ ; s/# \(.* parport$\)/\1/ ; s/# \(.* parport_pc$\)/\1/ " | sort >> etc/rc.d/rc.modules
+  depmod -a -b $PKG -F $PKG/boot/System.map $KVEREXTRA || exit 1
+  find $PKG/lib/modules/$KVEREXTRA -name '*.ko' -exec basename '{}' .ko \; | sort | sed 's,.*,# /sbin/modprobe -q &,' >> etc/rc.d/rc.modules
+  for m in ac agpgart battery button fan fuse lp parport parport_pc processor thermal video acpi-cpufreq powernow-k6 powernow-k7 powernow-k8 speedstep-smi speedstep-ich speedstep-centrino gx-suspmod longrun longhaul cpufreq-nforce2 e_powersaver cpufreq_ondemand; do
+    sed -ri 's,# (.* '$m'$),\1 2>/dev/null,' etc/rc.d/rc.modules
+  done
+  cat << 'EOF' >> etc/rc.d/rc.modules
+
+SCALING_GOVERNOR=ondemand
+# Try to enable the scaling_governor selected above:
+if [ -r /sys/devices/system/cpu/cpu0/cpufreq/scaling_available_governors ]; then
+  if grep -wq "$SCALING_GOVERNOR" /sys/devices/system/cpu/cpu0/cpufreq/scaling_available_governors ; then
+    if [ -r /sys/devices/system/cpu/cpu0/cpufreq/scaling_governor ]; then
+      for SYSCPUFILE in /sys/devices/system/cpu/cpu*/cpufreq/scaling_governor ; do
+        echo "$SCALING_GOVERNOR" > $SYSCPUFILE
+      done
+    fi
+  fi
+fi
+EOF
   chmod 755 etc/rc.d/rc.modules
-  rm -rf $DEST/modules.conf $DEST/persist
-  unset MODULECONF
-  # copy the kernel source outside the SLKBUILD tree to keep it.
-  cp -r $SRC/linuxsrc $startdir/
   # copy files necessary for later builds, like nvidia, ati, vbox and vmware
   (
     cd $SRC/linuxsrc
-    mkdir -p $DEST/usr/src/linux-$KVER/include
-    mkdir -p $DEST/usr/src/linux-$KVER/arch
+    mkdir -p $PKG/usr/src/linux-$KVER/include
+    mkdir -p $PKG/usr/src/linux-$KVER/arch
     for i in acpi asm-generic config drm generated linux math-emu media net pcmcia scsi sound trace video xen; do
-      cp -rf include/$i $DEST/usr/src/linux-$KVER/include/
+      cp -rf include/$i $PKG/usr/src/linux-$KVER/include/
     done
-    cp -rf arch/x86 $DEST/usr/src/linux-$KVER/arch/
-    cp -rf scripts Makefile Kbuild Module.symvers .config $DEST/usr/src/linux-$KVER/
+    cp -rf arch/x86 $PKG/usr/src/linux-$KVER/arch/
+    cp -rf scripts Makefile Kbuild Module.symvers .config $PKG/usr/src/linux-$KVER/
     # fix permissions on scripts dir
-    chmod 755 -R $DEST/usr/src/linux-$KVER/scripts
-    # add media/video headers
-    mkdir -p $DEST/usr/src/linux-$KVER/drivers/media/video
-    for i in $(find drivers/media/video -name "*.h"); do
-      mkdir -p $DEST/usr/src/linux-$KVER/$(dirname $i)
-      cp $i $DEST/usr/src/linux-$KVER/$i
+    chmod 755 -R $PKG/usr/src/linux-$KVER/scripts
+    # add video headers
+    mkdir -p $PKG/usr/src/linux-$KVER/drivers/video
+    for i in $(find drivers/video -name "*.h"); do
+      mkdir -p $PKG/usr/src/linux-$KVER/$(dirname $i)
+      cp $i $PKG/usr/src/linux-$KVER/$i
     done
     # add md headers
-    mkdir -p $DEST/usr/src/linux-$KVER/drivers/md
-    cp drivers/md/*.h $DEST/usr/src/linux-$KVER/drivers/md
+    mkdir -p $PKG/usr/src/linux-$KVER/drivers/md
+    cp drivers/md/*.h $PKG/usr/src/linux-$KVER/drivers/md
     # add wireless headers
-    mkdir -p $DEST/usr/src/linux-$KVER/net/mac80211/
-    cp net/mac80211/*.h $DEST/usr/src/linux-$KVER/net/mac80211/
+    mkdir -p $PKG/usr/src/linux-$KVER/net/mac80211/
+    cp net/mac80211/*.h $PKG/usr/src/linux-$KVER/net/mac80211/
     # add CLUSTERIP file for iptables
-    mkdir -p $DEST/usr/src/linux-$KVER/net/ipv4/netfilter/
-    cp net/ipv4/netfilter/ipt_CLUSTERIP.c $DEST/usr/src/linux-$KVER/net/ipv4/netfilter/
+    mkdir -p $PKG/usr/src/linux-$KVER/net/ipv4/netfilter/
+    cp net/ipv4/netfilter/ipt_CLUSTERIP.c $PKG/usr/src/linux-$KVER/net/ipv4/netfilter/
     # copy Kconfig files
     for i in $(find . -name "Kconfig*"); do
-      mkdir -p $DEST/usr/src/linux-$KVER/$(dirname $i)
-      cp $i $DEST/usr/src/linux-$KVER/$i
+      mkdir -p $PKG/usr/src/linux-$KVER/$(dirname $i)
+      cp $i $PKG/usr/src/linux-$KVER/$i
     done
     # delete the kernel binary in the sources
-    rm -f $DEST/usr/src/linux-$KVER/arch/x86/boot/compressed/vmlinux $DEST/usr/src/linux-$KVER/arch/x86/boot/compressed/vmlinux.bin* $DEST/usr/src/linux-$KVER/arch/x86/boot/vmlinux.bin $DEST/usr/src/linux-$KVER/arch/x86/boot/bzImage
+    rm -f $PKG/usr/src/linux-$KVER/arch/x86/boot/compressed/vmlinux $PKG/usr/src/linux-$KVER/arch/x86/boot/compressed/vmlinux.bin* $PKG/usr/src/linux-$KVER/arch/x86/boot/vmlinux.bin $PKG/usr/src/linux-$KVER/arch/x86/boot/bzImage
     # delete all .o files
-    for i in $(find $DEST/usr/src/linux-$KVER -name '*.o'); do
+    for i in $(find $PKG/usr/src/linux-$KVER -name '*.o'); do
       rm -f $i
     done
   )
   # fix build and source link in /lib/modules/XXX/
   (
-    cd $DEST/lib/modules/$KVEREXTRA/
+    cd $PKG/lib/modules/$KVEREXTRA/
     rm -f build && ln -s /usr/src/linux-$KVER build
     rm -f source && ln -s /usr/src/linux-$KVER source
   )
